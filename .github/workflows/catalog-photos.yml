@@ -1,0 +1,38 @@
+name: Backfill product photos
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: catalog-photo-backfill
+  cancel-in-progress: false
+env:
+  SUPABASE_URL: https://simjxoshjprrexdixbso.supabase.co
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SERVICE_ROLE_KEY }}
+  PYTHONUNBUFFERED: '1'
+jobs:
+  photos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        batch: [1,2,3,4,5,6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python catalog_worker.py --retailer-images 3000 --release-only
+  publish:
+    needs: photos
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python catalog_worker.py --release-only
