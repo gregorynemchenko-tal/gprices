@@ -1,0 +1,24 @@
+name: Refresh official catalog
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '27 */2 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: catalog-import
+  cancel-in-progress: false
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SUPABASE_URL: https://simjxoshjprrexdixbso.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SERVICE_ROLE_KEY }}
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python catalog_worker.py --max-jobs 6 --images 5
