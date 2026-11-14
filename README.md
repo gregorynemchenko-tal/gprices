@@ -29,6 +29,19 @@ These initial migrations were applied through the Management API, not root migra
 
 ## Worker and schedule
 
+Live connectivity audit: GitHub run 43612896938. Carrefour and Victory time out
+at TCP connect; Hazi Hinam's directory returns a Cloudflare JavaScript challenge
+(403), while its known Azure blob downloads return 200. TLS 1.2 does not solve
+this. A European Supabase Edge bridge was tested and has the same source limits.
+The cause cannot be reduced to a proven country restriction: exact firewall rules
+are unknown. The bridge remains server-only and is not used by the schedule.
+
+GitHub schedules **photo preparation and release publication only** every two
+hours. Price ingestion is an explicit manual `import_prices` option until a
+runner with verified source connectivity is available. The initial green run
+43611596359 preserved snapshots but did not refresh prices; error propagation
+was corrected afterwards. Do not claim automatic price refresh is working.
+
 `apps/retail-importer/catalog_worker.py` reads SUPABASE_URL and
 SUPABASE_SERVICE_ROLE_KEY on a server. Local ignored `.env.catalog-worker` is
 supported; never publish it. Linux Python 3.12 needs no extra packages.

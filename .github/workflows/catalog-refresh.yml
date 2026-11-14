@@ -1,6 +1,11 @@
 name: Refresh official catalog
 on:
   workflow_dispatch:
+    inputs:
+      import_prices:
+        description: 'Attempt official price imports (requires network access to chain hosts)'
+        type: boolean
+        default: false
   schedule:
     - cron: '27 */2 * * *'
 permissions:
@@ -15,11 +20,14 @@ jobs:
     env:
       SUPABASE_URL: https://simjxoshjprrexdixbso.supabase.co
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SERVICE_ROLE_KEY }}
-      CATALOG_FEED_PROXY_URL: https://simjxoshjprrexdixbso.supabase.co/functions/v1/catalog-feed-proxy
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python catalog_worker.py --max-jobs 6 --images 5
+      - name: Prepare licensed photos and publish catalog release
+        run: python catalog_worker.py --images 5 --release-only
+      - name: Attempt official price imports
+        if: github.event_name == 'workflow_dispatch' && inputs.import_prices
+        run: python catalog_worker.py --max-jobs 6
