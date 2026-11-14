@@ -1,90 +1,64 @@
-# Kabalator catalog deployment
+# gprices — серверный каталог Kabalator
 
-Target: `simjxoshjprrexdixbso` (independent catalog project).
-The existing `yivimpjpcufdpxyfycsz` project continues to own authentication and receipts.
-Do not run the root financial migrations against this catalog project.
+База: Supabase project `simjxoshjprrexdixbso`. Здесь находится только общий
+каталог и загрузчик; личные чеки остаются в отдельном проекте приложения.
 
-## Deployed 2026-11-14
+Опубликовано первоначально: 17 318 товаров, 26 934 цены трёх филиалов,
+9 079 записей акций на товары. Это не покрытие всех сетей Израиля.
 
-- Canonical product IDs and chain-scoped aliases.
-- Staged, atomic branch publication; source versions; price-change history.
-- Bounded public search/offers/promotions/health RPCs; server-only import and queue RPCs.
-- PGMQ queues: catalog_import, catalog_images, catalog_dead_letters.
-- Cron plans imports every two hours, photos daily, retention daily.
-- Private raw bucket; public licensed images and versioned catalog releases.
-- Initial 17,318 products; 26,934 branch prices; 9,079 promotion-product rows.
-- Three published branches: Carrefour 81, Victory 23, Hazi Hinam 201.
-- Other registered chains are explicitly not connected; directory presence does not imply imported coverage.
+## Что работает
 
-The personal-purchase projection is ready but empty in the new project.
-It is not connected to the old receipt database yet. No private users or receipts
-were copied. All live publication integration checks run in a rolled-back transaction.
+- Справочники, постоянные ID товаров, отдельные внутренние коды сетей.
+- Импорт в промежуточные данные и атомарная публикация филиала.
+- История изменений цен и сохранение старых данных при сбое.
+- Публичные API поиска, цен, акций и состояния источников.
+- Очереди импорта/изображений, закрытые операции записи.
+- Хранение разрешённых фото Open Food Facts в Supabase с лицензией.
+- GitHub Actions каждые два часа подготавливает фото и публикует готовую версию каталога.
 
-## Updating schema
+## Ограничение автоматического импорта цен
 
-This directory is separately linked with Supabase CLI. Apply its SQL files with
-`supabase db query --linked --workdir deploy/catalog --file supabase/migrations/<file>`.
-Paths passed to the CLI are relative to its workdir. Never use root `db push` here.
-These initial migrations were applied through the Management API, not root migration history.
+Проверка из GitHub: https://github.com/gregorynemchenko-tal/gprices/actions/runs/43612896938
 
-## Worker and schedule
+Carrefour и Victory не устанавливают TCP-соединение с обработчиком GitHub.
+Каталог Hazi Hinam отвечает защитной страницей Cloudflare (403); при этом
+известные файлы в Azure доступны. Переключение на TLS 1.2 не помогло.
+Supabase-шлюз также проверен и не решает доступ к каталогам. Точное правило
+сетевой фильтрации неизвестно; сервер в другом регионе нужно проверять заранее.
 
-Live connectivity audit: GitHub run 43612896938. Carrefour and Victory time out
-at TCP connect; Hazi Hinam's directory returns a Cloudflare JavaScript challenge
-(403), while its known Azure blob downloads return 200. TLS 1.2 does not solve
-this. A European Supabase Edge bridge was tested and has the same source limits.
-The cause cannot be reduced to a proven country restriction: exact firewall rules
-are unknown. The bridge remains server-only and is not used by the schedule.
+Поэтому **обновление цен по расписанию пока не включено**. Цены в базе —
+последний успешно загруженный снимок с исходными датами. В ручном запуске
+workflow можно включить `import_prices` для проверки доступности источников.
+При неудаче задание сообщает ошибку и сохраняет опубликованные данные.
 
-GitHub schedules **photo preparation and release publication only** every two
-hours. Price ingestion is an explicit manual `import_prices` option until a
-runner with verified source connectivity is available. The initial green run
-43611596359 preserved snapshots but did not refresh prices; error propagation
-was corrected afterwards. Do not claim automatic price refresh is working.
+Первый запуск 43611596359 имел зелёный статус, но цены не обновил; это был
+дефект отчёта об ошибках, исправленный следующим коммитом. Не считать этот
+прогон подтверждением доступности файлов сетей.
 
-`apps/retail-importer/catalog_worker.py` reads SUPABASE_URL and
-SUPABASE_SERVICE_ROLE_KEY on a server. Local ignored `.env.catalog-worker` is
-supported; never publish it. Linux Python 3.12 needs no extra packages.
+## Запуск обработчика на сервере с проверенным доступом
 
-`--seed` imports the checked local prototype fixtures (initial bootstrap only).
-`--max-jobs 6 --images 5` claims queued store jobs, fetches complete official
-snapshots, publishes independent branches, and prepares up to five licensed photos.
-`--release-only` assembles the Expo compatibility snapshot from published DB rows.
+Python 3.12, дополнительных библиотек не требуется.
+Серверные переменные: `SUPABASE_URL` и `SUPABASE_SERVICE_ROLE_KEY`.
+Ключ хранить в настройках сервера или GitHub Secrets, никогда в коде.
 
-GitHub Actions runs every two hours, without a permanent VM. GitHub scheduled
-runs can be delayed and do not provide an exact-time SLA. One run at a time,
-25-minute timeout, 30-minute message lease, up to five attempts then dead letter.
-Failures preserve the last published data. A prepared workflow alone does not
-mean the scheduled runner is enabled; verify a successful live workflow run.
+```sh
+python catalog_worker.py --max-jobs 6 --images 5
+```
 
-The worker consumes the three currently enabled branches. Other branches are
-registered but disabled until their import and resource usage are checked.
-FTPS adapters are not yet integrated into the new canonical worker. These are
-explicit remaining rollout steps, not promised full-market coverage.
+Подготовка только фото и выпуск каталога:
 
-## Images
+```sh
+python catalog_worker.py --images 5 --release-only
+```
 
-Only matching Open Food Facts images with CC BY-SA attribution are cached in
-Supabase, at content-hashed paths. Retailer photographs whose reuse rights are
-unverified are not copied. Missing images remain pending/missing, not fabricated.
-Current worker saves the original JPEG; thumbnail generation is a later step.
+Три начальные схемы находятся в файлах `20261114*.sql`. Они уже применены
+к указанному проекту. Не запускать их повторно вслепую и не переносить сюда
+миграции прежнего финансового приложения.
 
-## Mobile transition
+Проверка публикации с откатом всех тестовых данных: `verify-publication.sql`.
+Диагностика соединений без секретов: `diagnose_sources.py`.
 
-Expo loads a shared versioned manifest from Supabase public Storage and caches
-the completed release. The manifest is published last, so catalog and promotions
-come from the same completed release. Source file dates remain independent.
-This is a compatibility bridge for existing screens: the server paginated RPCs
-are deployed, but the prototype still reads the complete release. Moving each
-screen to server pagination and removing direct retailer photo fallback remain.
-
-Public catalog configuration is separate from receipt auth configuration.
-Only the public key is added to mobile; the import key stays in server settings.
-
-## Operations still to extend
-
-- Import all branch directories/snapshots and remaining network adapters.
-- Full raw promotion-group preservation, including products absent from prices.
-- Licensed photo coverage, thumbnails, missing-photo rechecks and monitoring.
-- Raw Storage and old release object cleanup (DB history retention is active).
-- Receipt-owned projection migration; paginated mobile UI; operator alerts.
+Для полного охвата остаются адаптеры остальных сетей, все филиалы, подготовка
+миниатюр, перенос интерфейса на постраничные API и связь личных продуктов с
+прежней базой чеков. Публичная доступность фотографии не означает право её
+копировать: обработчик сохраняет только фото с проверенной открытой лицензией.
