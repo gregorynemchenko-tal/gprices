@@ -89,7 +89,7 @@ def upload(db, bucket, path, payload, mime):
 def register(db, catalog):
     db.upsert('retail_chains', [{'id': c.key, 'name': c.name, 'code': c.code, 'source_url': c.feed_home_url,
         'adapter': 'https' if c in CHAINS else 'ftps_external', 'enabled': c in CHAINS,
-        'coverage_status': 'not_imported' if c in CHAINS else 'not_connected'} for c in (*CHAINS, *FTPS_CHAINS)], 'id')
+        'coverage_status': 'not_imported' if c in CHAINS else 'not_connected'} for c in {c.key:c for c in (*FTPS_CHAINS, *CHAINS)}.values()], 'id')
     stores = []
     selected = {store_key(c) for c in catalog['chains']}
     for c in CHAINS:
@@ -119,11 +119,11 @@ def publish_releases(db):
     prototype move off bundled files before its screen-by-screen pagination work.
     A versioned manifest is replaced last, after both immutable files are uploaded.
     """
-    def all_rows(table, select='*'):
+    def all_rows(table, select='*', order='id', filters=None):
         result = []
         offset = 0
         while True:
-            page = db.request('GET', table, {'select': select, 'order': 'id', 'offset': str(offset), 'limit': '1000'})
+            page = db.request('GET', table, {'select': select, 'order': order, 'offset': str(offset), 'limit': '1000',**(filters or {})})
             result.extend(page)
             if len(page) < 1000: return result
             offset += len(page)
@@ -132,14 +132,15 @@ def publish_releases(db):
     files = {f['id']: f for f in all_rows('source_files')}
     stores = {s['id']: s for s in all_rows('retail_stores')}
     chains = {c['id']: c for c in all_rows('retail_chains')}
-    images = db.request('GET', 'product_images', {'status': 'eq.ready', 'select': '*', 'limit': '1000'})
+    images = all_rows('product_images',order='product_id',filters={'status':'eq.ready'})
     image_map = {i['product_id']: i for i in images}
     for p in products:
         i = image_map.get(p['id'])
         p['image_status'] = 'ready' if i else 'pending'
         if i:
-            p.update(image_url=db.base_url + '/storage/v1/object/public/product-images/' + i['storage_path'],
-                     image_source=i['source_url'], image_license=i['license'], image_version=i['version'])
+            p.update(image_url=(db.base_url + '/storage/v1/object/public/product-images/' + i['storage_path']) if i['storage_path'] else i.get('external_url'),
+                     image_source=i.get('external_url') or i['source_url'], image_license=i['license'] if i['storage_path'] else None,
+                     image_provider=i.get('provider','Open Food Facts'),image_version=i['version'])
     branches, sources, promos = [], [], []
     for s in snapshots:
         if s['state'] != 'published': continue
@@ -179,10 +180,11 @@ def publish_releases(db):
     print(json.dumps({'release': version, 'products': len(products), 'branches': len(branches), 'promotions': len(promos)}), flush=True)
 
 
-def consume(db, max_jobs):
+def consume(db, max_jobs, chain=None):
     failed = 0
+    if chain: rpc(db,'plan_catalog_jobs')
     for _ in range(max_jobs):
-        claimed = rpc(db, 'claim_catalog_job')
+        claimed = rpc(db,'claim_catalog_chain_job',p_chain_id=chain) if chain else rpc(db, 'claim_catalog_job')
         if not claimed: break
         job = claimed['job']
         target = job['store_id']
@@ -208,8 +210,13 @@ def main():
     parser.add_argument('--max-jobs', type=int, default=3)
     parser.add_argument('--release-only', action='store_true')
     parser.add_argument('--images', type=int, default=0)
+    parser.add_argument('--retailer-images', type=int, default=0)
+    parser.add_argument('--chain', choices=list(CHAINS_BY_KEY))
     args = parser.parse_args()
     db = load_environment()
+    if args.retailer_images:
+        from retailer_images import prepare
+        prepare(db,max(0,min(args.retailer_images,5000)))
     if args.images:
         from catalog_images import prepare
         prepare(db, max(0, min(args.images, 20)))
@@ -221,7 +228,7 @@ def main():
         publish_releases(db)
         print(json.dumps({'planned_jobs': rpc(db, 'plan_catalog_jobs')}), flush=True)
     elif args.release_only: publish_releases(db)
-    else: consume(db, max(1, min(args.max_jobs, 12)))
+    else: consume(db, max(1, min(args.max_jobs, 12)),args.chain)
 
 
 if __name__ == '__main__':

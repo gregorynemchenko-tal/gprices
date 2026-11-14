@@ -107,12 +107,12 @@ def classify(name, weighted):
     return 'Другое', '🛍', '#F0EEE7'
 
 def published_at(filename):
-    match = re.search(r'(20\d{6})[-_]?(\d{6})', filename)
+    match = re.search(r'(20\d{6})[-_]?(\d{4}(?:\d{2})?)(?!\d)', filename)
     if not match: return None
     # Feed timestamps are local Israel times. zoneinfo is available in the
     # standard runtime; Windows installations may need the tzdata package.
     from zoneinfo import ZoneInfo
-    value = dt.datetime.strptime(''.join(match.groups()), '%Y%m%d%H%M%S').replace(tzinfo=ZoneInfo('Asia/Jerusalem'))
+    value = dt.datetime.strptime(match.group(1) + match.group(2).ljust(6,'0'), '%Y%m%d%H%M%S').replace(tzinfo=ZoneInfo('Asia/Jerusalem'))
     return value.astimezone(dt.timezone.utc).isoformat()
 
 def build(targets, output, refresh=False, offline=False):
@@ -147,7 +147,7 @@ def build(targets, output, refresh=False, offline=False):
                     code = child_text(item, 'ItemCode').strip()
                     name = child_text(item, 'ItemName', 'ManufactureItemDescription').strip()
                     price = minor_units(child_text(item, 'ItemPrice'))
-                    weighted = boolean_flag(child_text(item, 'bIsWeighted'))
+                    weighted = boolean_flag(child_text(item, 'bIsWeighted', 'IsWeighted'))
                     if not re.fullmatch(r'\d{1,20}', code) or not name or price is None or price <= 0:
                         item.clear(); continue
                     identity = product_key(code, chain.code, weighted)
@@ -179,7 +179,7 @@ def build(targets, output, refresh=False, offline=False):
             if not prices: raise RuntimeError('Empty price snapshot')
             chains.append({'id': key, 'name': chain.name, 'branch': store['name'], 'address': store['address'],
                 'storeId': store['external_id'], 'cityCode': store['city_code'], 'distance': 'Расстояние не рассчитано',
-                'color': {'carrefour': '#326CAC', 'victory': '#306EB2', 'hazi_hinam': '#9A5135'}[key],
+                'color': {'carrefour': '#326CAC', 'victory': '#306EB2', 'hazi_hinam': '#9A5135', 'keshet_teamim': '#8B3454'}.get(key, '#326CAC'),
                 'prices': prices, 'sourceUrl': chain.feed_home_url, 'sourceFile': remote.name,
                 'fetchedAt': fetched, 'publishedAt': published_at(remote.name), 'productCount': len(prices)})
             print(json.dumps({'chain': key, 'store': store['external_id'], 'rows': count, 'products': len(prices)}, ensure_ascii=True), flush=True)

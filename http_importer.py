@@ -12,6 +12,7 @@ import urllib.request
 import time
 from html.parser import HTMLParser
 from collections.abc import Sequence
+from published_prices import PublishedPricesClient
 
 from importer import (
     Chain,
@@ -49,7 +50,9 @@ HAZI_HINAM = Chain(
     source_key_override="hazi_hinam",
     feed_home_url="https://shop.hazi-hinam.co.il/Prices",
 )
-CHAINS = (CARREFOUR, VICTORY, HAZI_HINAM)
+KESHET_TEAMIM = Chain('keshet_teamim', '7290785400000', 'Keshet Teamim', 'Keshet',
+    source_key_override='publishedprices_keshet_teamim')
+CHAINS = (CARREFOUR, VICTORY, HAZI_HINAM, KESHET_TEAMIM)
 CHAINS_BY_KEY = {chain.key: chain for chain in CHAINS}
 
 
@@ -195,6 +198,7 @@ class HaziHinamClient:
 
 
 def client_for_chain(chain: Chain):
+    if chain.key == KESHET_TEAMIM.key: return PublishedPricesClient(chain)
     return {CARREFOUR.code: CarrefourClient, VICTORY.code: VictoryClient,
             HAZI_HINAM.code: HaziHinamClient}[chain.code]()
 

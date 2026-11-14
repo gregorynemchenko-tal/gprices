@@ -27,7 +27,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Prepare licensed photos and publish catalog release
-        run: python catalog_worker.py --images 5 --release-only
+        run: python catalog_worker.py --retailer-images 2500 --images 5 --release-only
+      - name: Refresh Keshet Teamim
+        run: python catalog_worker.py --chain keshet_teamim --max-jobs 2
       - name: Attempt official price imports
         if: github.event_name == 'workflow_dispatch' && inputs.import_prices
         run: python catalog_worker.py --max-jobs 6

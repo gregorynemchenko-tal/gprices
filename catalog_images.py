@@ -37,7 +37,7 @@ def prepare(db, limit=5):
             if not code: raise ValueError('Not a global barcode')
             if index: time.sleep(5.1)  # Open Food Facts API: at most 12 requests/minute.
             headers = {'User-Agent': 'Kabalator/0.2 (Israeli grocery catalog test)'}
-            url = f'https://world.openfoodfacts.org/api/v2/product/{code}.json?fields=code,image_front_url,image_url'
+            url = f'https://world.openfoodfacts.org/api/v3.6/product/{code}?fields=code,image_front_url,image_url'
             with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
                 data = json.load(response)
             product = data.get('product') or {}

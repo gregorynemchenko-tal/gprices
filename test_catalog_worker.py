@@ -5,6 +5,9 @@ import unittest
 sys.path.insert(0,str(Path(__file__).parents[1]))
 from catalog_worker import snapshot_rows, store_key
 from catalog_images import allowed_image, photo_code
+from retailer_images import probe
+from unittest.mock import Mock,patch
+import urllib.error
 
 
 class CatalogWorkerTests(unittest.TestCase):
@@ -23,3 +26,14 @@ class CatalogWorkerTests(unittest.TestCase):
         self.assertFalse(allowed_image('https://images.openfoodfacts.org.evil.test/images/products/x.jpg'))
         self.assertIsNone(photo_code('7290785400000:146'))
         self.assertEqual(photo_code('gtin:07290004131074'),'7290004131074')
+
+    @patch('retailer_images.time.sleep')
+    def test_retailer_photo_uses_head_and_rejects_html_placeholder(self,_sleep):
+        response=Mock(status=200,url='https://img.rami-levy.co.il/product/7290004131074/small.jpg')
+        response.headers={'Content-Type':'image/jpeg','Content-Length':'100'}
+        response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
+        fetcher=Mock(return_value=response)
+        self.assertTrue(probe('gtin:07290004131074',fetcher)['found'])
+        self.assertEqual(fetcher.call_args.args[0].method,'HEAD')
+        response.headers['Content-Type']='text/html'
+        self.assertFalse(probe('gtin:07290004131074',fetcher)['found'])

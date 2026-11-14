@@ -43,6 +43,10 @@ def parse_promotions(payload, filename, chain, branch, catalog, fetched_at):
             coupon = boolean_flag(child_text(promotion, 'AdditionalIsCoupon')) or bool(re.search(r'קופון|coupon', description, re.I))
             gift = boolean_flag(child_text(promotion, 'IsGiftItem'))
             groups = list(descendants(promotion, 'group'))
+            if not groups:
+                yield from parse_flat_promotion(promotion, chain, branch, valid_products, filename, fetched_at)
+                promotion.clear()
+                continue
             for group in groups:
                 group_id = child_text(group, 'GroupID')
                 purchase = max(minor_units(child_text(group, 'MinPurchaseAmount')) or 0, 0)
@@ -73,6 +77,45 @@ def parse_promotions(payload, filename, chain, branch, catalog, fetched_at):
                            'hours': hours, 'days': days, 'redemptionLimit': child_text(promotion, 'RedemptionLimit'),
                            'sourceFile': filename, 'publishedAt': published_at(filename), 'fetchedAt': fetched_at}
             promotion.clear()
+
+
+def parse_flat_promotion(promotion, chain, branch, products, filename, fetched_at):
+    """MOF flat PromotionItems/Item layout (Keshet); never infer bundle unit price."""
+    restriction_nodes = list(descendants(promotion, 'additionalrestrictions'))
+    flags = restriction_nodes[0] if restriction_nodes else promotion
+    if child_text(flags, 'AdditionalIsActive') == '0': return
+    description = child_text(promotion, 'PromotionDescription')
+    club_ids = [child_text(c,'ClubId') for c in descendants(promotion,'clubs')]
+    club = next((c for c in club_ids if c and c != '0'), '0')
+    member = club != '0' or bool(re.search(r'מועדון|club',description,re.I))
+    coupon = boolean_flag(child_text(flags,'AdditionalIsCoupon')) or bool(re.search(r'קופון|coupon',description,re.I))
+    quantity = decimal(child_text(promotion,'MinQty'))
+    price = minor_units(child_text(promotion,'DiscountedPrice'))
+    reward = child_text(promotion,'RewardType')
+    hours = ' — '.join(filter(None,[child_text(promotion,'PromotionStartHour'),child_text(promotion,'PromotionEndHour')]))
+    purchase = max(minor_units(child_text(promotion,'MinPurchaseAmount')) or 0,0)
+    restrictions = '; '.join(f'{e.tag}={e.text.strip()}' for e in flags
+        if e.text and e.text.strip() not in ('0','') and local_name(e.tag) != 'additionalisactive')
+    code = child_text(promotion,'PromotionId')
+    seen = set()
+    for container in descendants(promotion,'promotionitems'):
+        for item in container:
+            if local_name(item.tag) != 'item': continue
+            barcode = child_text(item,'ItemCode')
+            identity = product_key(barcode,chain.code,False)
+            if identity not in products or identity in seen: continue
+            seen.add(identity)
+            gift = boolean_flag(child_text(item,'IsGiftItem')) or boolean_flag(child_text(flags,'AdditionalGiftCount'))
+            yield {'id':f'{chain.key}:{branch["storeId"]}:{code}:flat:{barcode}:{reward}:{price}:{quantity}',
+                'chainId':chain.key,'productId':identity,'description':description,
+                'startsAt':local_datetime(promotion,'Start'),'endsAt':local_datetime(promotion,'End'),
+                'memberOnly':member,'clubId':club,'couponRequired':coupon,'gift':gift,
+                'minQuantity':quantity,'minPurchase':purchase,'maxQuantity':decimal(child_text(promotion,'MaxQty')),
+                'rewardType':reward,'offerPrice':price if price is not None and price>0 else None,
+                'groupCount':1,'simplePrice':None,'discountRate':decimal(child_text(promotion,'DiscountRate')),
+                'restrictions':restrictions,'remarks':child_text(promotion,'Remarks'),'hours':hours,
+                'days':child_text(promotion,'PromotionDays'),'redemptionLimit':child_text(promotion,'RedemptionLimit'),
+                'sourceFile':filename,'publishedAt':published_at(filename),'fetchedAt':fetched_at}
 
 
 def build(offline=False, targets=None, output=None, catalog=None):
