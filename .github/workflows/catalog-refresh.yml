@@ -6,6 +6,11 @@ on:
         description: 'Attempt official price imports (requires network access to chain hosts)'
         type: boolean
         default: false
+      photo_batch:
+        description: 'Number of retailer photo URLs to verify'
+        type: choice
+        options: ['0','250','2500']
+        default: '2500'
   schedule:
     - cron: '27 */2 * * *'
 permissions:
@@ -21,15 +26,16 @@ jobs:
       SUPABASE_URL: https://simjxoshjprrexdixbso.supabase.co
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SERVICE_ROLE_KEY }}
       PYTHONUNBUFFERED: '1'
+      PHOTO_BATCH: ${{ github.event_name == 'workflow_dispatch' && inputs.photo_batch || '2500' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Prepare licensed photos and publish catalog release
-        run: python catalog_worker.py --retailer-images 2500 --images 5 --release-only
       - name: Refresh Keshet Teamim
         run: python catalog_worker.py --chain keshet_teamim --max-jobs 2
+      - name: Prepare product photos and publish catalog release
+        run: python catalog_worker.py --retailer-images "$PHOTO_BATCH" --images 5 --release-only
       - name: Attempt official price imports
         if: github.event_name == 'workflow_dispatch' && inputs.import_prices
         run: python catalog_worker.py --max-jobs 6

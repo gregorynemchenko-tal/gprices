@@ -168,6 +168,7 @@ def publish_releases(db):
                 if len(page) < 1000: break
                 offset += len(page)
     now = dt.datetime.now(dt.timezone.utc).isoformat()
+    products.sort(key=lambda p:(p.get('image_status')!='ready',p.get('category')=='Другое',not p['id'].startswith('gtin:'),p.get('original','')))
     catalog = {'generatedAt': now, 'city': 'Ришон-ле-Цион', 'products': products, 'chains': branches, 'failures': []}
     promotion_data = {'generatedAt': now, 'sources': sources, 'promotions': promos, 'failures': []}
     catalog_bytes = json.dumps(catalog, ensure_ascii=False, separators=(',', ':')).encode()
