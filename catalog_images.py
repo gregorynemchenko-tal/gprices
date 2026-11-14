@@ -8,6 +8,7 @@ import json
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 from catalog_worker import rpc, upload
 
 
@@ -62,6 +63,14 @@ def prepare(db, limit=5):
                 'checked_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
             rpc(db, 'finish_catalog_image', p_id=claim['id'], p_success=True)
             print(json.dumps({'image_ready': identity}), flush=True)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                db.request('PATCH', 'product_images', {'product_id': 'eq.' + identity},
+                    {'status': 'missing', 'checked_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
+                rpc(db, 'finish_catalog_image', p_id=claim['id'], p_success=True)
+            else:
+                rpc(db, 'finish_catalog_image', p_id=claim['id'], p_success=False)
+                print(json.dumps({'image_error': identity, 'status': error.code}), flush=True)
         except Exception as error:
             rpc(db, 'finish_catalog_image', p_id=claim['id'], p_success=False)
             print(json.dumps({'image_error': identity, 'error': type(error).__name__}), flush=True)

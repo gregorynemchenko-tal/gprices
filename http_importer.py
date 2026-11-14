@@ -54,6 +54,16 @@ CHAINS_BY_KEY = {chain.key: chain for chain in CHAINS}
 
 
 def request_bytes(url: str, referer: str) -> bytes:
+    proxy = os.environ.get('CATALOG_FEED_PROXY_URL')
+    if proxy:
+        if urllib.parse.urlsplit(proxy).hostname != 'simjxoshjprrexdixbso.supabase.co':
+            raise ImportFailure('Unexpected catalog bridge host')
+        key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
+        proxy += ('&' if '?' in proxy else '?') + 'forceFunctionRegion=eu-central-1'
+        request = urllib.request.Request(proxy, data=json.dumps({'url': url}).encode(), method='POST', headers={
+            'Content-Type': 'application/json', 'apikey': key, 'Authorization': 'Bearer ' + key, 'x-region': 'eu-central-1'})
+        with urllib.request.urlopen(request, timeout=90) as response:
+            return response.read()
     request = urllib.request.Request(url, headers={**HEADERS, "Referer": referer})
     with urllib.request.urlopen(request, timeout=90) as response:
         return response.read()

@@ -180,6 +180,7 @@ def publish_releases(db):
 
 
 def consume(db, max_jobs):
+    failed = 0
     for _ in range(max_jobs):
         claimed = rpc(db, 'claim_catalog_job')
         if not claimed: break
@@ -194,9 +195,11 @@ def consume(db, max_jobs):
             import_catalog(db, catalog, promotions)
             rpc(db, 'finish_catalog_job', p_id=claimed['id'], p_success=True)
         except Exception as error:
+            failed += 1
             rpc(db, 'finish_catalog_job', p_id=claimed['id'], p_success=False, p_error=str(error)[:500])
             print(json.dumps({'store': target, 'error': str(error)[:200]}), flush=True)
     publish_releases(db)
+    if failed: raise RuntimeError(f'{failed} catalog job(s) failed; previous published versions preserved')
 
 
 def main():

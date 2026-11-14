@@ -15,6 +15,7 @@ jobs:
     env:
       SUPABASE_URL: https://simjxoshjprrexdixbso.supabase.co
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SERVICE_ROLE_KEY }}
+      CATALOG_FEED_PROXY_URL: https://simjxoshjprrexdixbso.supabase.co/functions/v1/catalog-feed-proxy
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
