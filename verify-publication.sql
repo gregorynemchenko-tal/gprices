@@ -8,7 +8,7 @@ begin
  if has_function_privilege('anon','public.claim_catalog_job()','execute') then raise exception 'Anonymous queue access allowed'; end if;
  insert into public.retail_chains(id,name,code,source_url,adapter) values('integration-test','QA','integration-test','https://example.com','test');
  insert into public.retail_stores(id,chain_id,external_id,name) values('integration-test:1','integration-test','1','QA');
- row_data:='[{"id":"integration-test:product","barcode":"123","original":"QA","name":"QA","category":"QA","searchText":"qa","price":100}]'::jsonb;
+ row_data:='[{"id":"integration-test:product","barcode":"123","original":"QA","name":"QA","category":"QA","searchText":"qa milk","price":100}]'::jsonb;
  s:=public.begin_catalog_snapshot('integration-test:1','prices','first',now()-interval '2 hours',now());
  perform public.stage_catalog_rows(s,row_data);
  if exists(select 1 from public.retail_prices_current where store_id='integration-test:1') then raise exception 'Staging leaked before publication'; end if;
@@ -22,9 +22,12 @@ begin
  perform public.publish_catalog_snapshot(s,1);
  if (select count(*) from public.retail_price_changes where store_id='integration-test:1')<>1 then raise exception 'Duplicate history'; end if;
  s2:=public.begin_catalog_snapshot('integration-test:1','prices','second',now()-interval '1 hour',now());
- perform public.stage_catalog_rows(s2,jsonb_set(row_data,'{0,price}','120'));
+ perform public.stage_catalog_rows(s2,jsonb_set(jsonb_set(row_data,'{0,price}','120'),'{0,searchText}','"qa dairy"'));
  if (select price_minor from public.retail_prices_current where store_id='integration-test:1')<>100 then raise exception 'Interrupted import changed published price'; end if;
  perform public.publish_catalog_snapshot(s2,1);
+ if not exists(select 1 from public.catalog_products where id='integration-test:product'
+  and position('milk' in search_text)>0 and position('dairy' in search_text)>0 and payload->>'searchText'=search_text)
+ then raise exception 'Another source erased search aliases'; end if;
  s:=public.begin_catalog_snapshot('integration-test:1','prices','older',now()-interval '3 hours',now());
  perform public.stage_catalog_rows(s,jsonb_set(row_data,'{0,price}','90'));
  result:=public.publish_catalog_snapshot(s,1);
