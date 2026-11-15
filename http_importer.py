@@ -10,6 +10,8 @@ import re
 import urllib.parse
 import urllib.request
 import time
+import html
+import datetime as dt
 from html.parser import HTMLParser
 from collections.abc import Sequence
 from published_prices import PublishedPricesClient
@@ -21,6 +23,7 @@ from importer import (
     RemoteFile,
     SupabaseRest,
     digits,
+    CHAINS_BY_KEY as PORTAL_CHAINS,
 )
 
 
@@ -52,7 +55,14 @@ HAZI_HINAM = Chain(
 )
 KESHET_TEAMIM = Chain('keshet_teamim', '7290785400000', 'Keshet Teamim', 'Keshet',
     source_key_override='publishedprices_keshet_teamim')
-CHAINS = (CARREFOUR, VICTORY, HAZI_HINAM, KESHET_TEAMIM)
+SHUFERSAL = Chain('shufersal', '7290027600007', 'Shufersal', '',
+    source_key_override='shufersal', feed_home_url='https://prices.shufersal.co.il/')
+MAHSANEI_HASHUK = Chain('mahsanei_hashuk', '7290661400001', 'Mahsanei HaShuk', '',
+    source_key_override='mahsanei_hashuk', feed_home_url='https://laibcatalog.co.il/')
+SUPER_BAREKET = Chain('super_bareket', '7290875100001', 'Super Bareket', '',
+    source_key_override='super_bareket', feed_home_url='https://superbareket.binaprojects.com/Main.aspx')
+PORTAL_KEYS = ('rami_levy', 'osher_ad', 'yohananof', 'tiv_taam', 'freshmarket')
+CHAINS = (CARREFOUR, VICTORY, HAZI_HINAM, KESHET_TEAMIM, *(PORTAL_CHAINS[key] for key in PORTAL_KEYS), SHUFERSAL, MAHSANEI_HASHUK, SUPER_BAREKET)
 CHAINS_BY_KEY = {chain.key: chain for chain in CHAINS}
 
 
@@ -138,6 +148,87 @@ class VictoryClient:
         return request_bytes(self.source_url(remote), self.chain.feed_home_url)
 
 
+class MahsaneiHashukClient(VictoryClient):
+    directory_url = 'https://laibcatalog.co.il/webapi/api/getfiles?edi=7290661400001'
+
+    def __init__(self):
+        self.chain = MAHSANEI_HASHUK
+
+
+class ShufersalClient:
+    def __init__(self, store_id=None):
+        self.chain = SHUFERSAL
+        self.store_id = str(int(store_id)) if store_id is not None else None
+        self.urls = {}
+
+    def list(self):
+        if self.store_id is None:
+            raise ImportFailure('Shufersal requires an explicit branch')
+        self.urls = {}
+        for prefix, category in [('Stores', 5), ('PriceFull', 2), ('PromoFull', 4)]:
+            query = urllib.parse.urlencode({'catID': category, 'storeId': 0 if category == 5 else self.store_id, 'sort': 'Time', 'sortdir': 'DESC'})
+            page = request_bytes(self.chain.feed_home_url + 'FileObject/UpdateCategory?' + query, self.chain.feed_home_url).decode('utf-8-sig')
+            for source in re.findall(r'href="(https://pricesprodpublic\.blob\.core\.windows\.net/[^"<>]+)"', page, re.I):
+                source = html.unescape(source)
+                name = urllib.parse.unquote(urllib.parse.urlsplit(source).path.rsplit('/', 1)[-1])
+                if name.lower().startswith(prefix.lower()) and self.chain.code in name and name.lower().endswith('.gz'):
+                    self.urls[name] = source
+            if not any(n.lower().startswith(prefix.lower()) for n in self.urls):
+                raise ImportFailure('Shufersal did not publish ' + prefix)
+        return [RemoteFile(n) for n in self.urls]
+
+    def source_url(self, remote):
+        return self.urls[remote.name]
+
+    def download(self, remote):
+        return request_bytes(self.source_url(remote), self.chain.feed_home_url)
+
+
+class BinaClient:
+    """Read the same JSON listing and download resolver used by the public UI."""
+    def __init__(self):
+        self.chain = SUPER_BAREKET
+        self.base = 'https://superbareket.binaprojects.com/'
+        self.names = set()
+
+    def read_json(self, path, query):
+        value = json.loads(request_bytes(self.base + path + '?' + urllib.parse.urlencode(query), self.chain.feed_home_url).decode('utf-8-sig'))
+        return json.loads(value) if isinstance(value, str) and value.lstrip().startswith(('[','{','"')) else value
+
+    def list(self):
+        from zoneinfo import ZoneInfo
+        day = dt.datetime.now(ZoneInfo('Asia/Jerusalem')).date()
+        self.names = set()
+        # Include the preceding day for branches whose full snapshot is overnight.
+        for date in (day, day - dt.timedelta(days=1)):
+            for kind in (1, 4, 5):
+                rows = self.read_json('MainIO_Hok.aspx', {'_': self.chain.code, 'wReshet': 'הכל', 'WFileType': kind, 'WDate': date.strftime('%d/%m/%Y'), 'WStore': ''})
+                if not isinstance(rows, list): raise ImportFailure('Unexpected Bina directory')
+                for row in rows:
+                    name = row.get('FileNm', '')
+                    if re.fullmatch(r'(?:Stores(?:Full)?|PriceFull|PromoFull)' + self.chain.code + r'[-_][\d_-]+\.(?:gz|xml)', name, re.I):
+                        self.names.add(name)
+        if not self.names: raise ImportFailure('Bina directory is empty')
+        return [RemoteFile(n) for n in sorted(self.names)]
+
+    def source_url(self, remote):
+        if remote.name not in self.names: raise ImportFailure('File was not listed by Bina')
+        result = self.read_json('Download.aspx', {'FileNm': remote.name})
+        if isinstance(result, list) and result: result = result[0]
+        if isinstance(result, dict): result = result.get('SPath') or result.get('path')
+        if not isinstance(result, str): raise ImportFailure('Bina download path missing')
+        url = urllib.parse.urljoin(self.base, result.replace('\\', '/'))
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme != 'https' or parsed.hostname != 'superbareket.binaprojects.com':
+            raise ImportFailure('Unexpected Bina download host')
+        return url
+
+    def download(self, remote):
+        payload = request_bytes(self.source_url(remote), self.chain.feed_home_url)
+        if payload.lstrip().lower().startswith((b'<!doctype html', b'<html')): raise ImportFailure('Bina returned HTML instead of XML')
+        return payload
+
+
 class HaziDirectoryParser(HTMLParser):
     def __init__(self, page_url: str):
         super().__init__()
@@ -197,8 +288,11 @@ class HaziHinamClient:
         return request_bytes(self.source_url(remote), self.chain.feed_home_url)
 
 
-def client_for_chain(chain: Chain):
-    if chain.key == KESHET_TEAMIM.key: return PublishedPricesClient(chain)
+def client_for_chain(chain: Chain, store_id=None):
+    if chain.key == KESHET_TEAMIM.key or chain.key in PORTAL_KEYS: return PublishedPricesClient(chain)
+    if chain.key == SHUFERSAL.key: return ShufersalClient(store_id)
+    if chain.key == MAHSANEI_HASHUK.key: return MahsaneiHashukClient()
+    if chain.key == SUPER_BAREKET.key: return BinaClient()
     return {CARREFOUR.code: CarrefourClient, VICTORY.code: VictoryClient,
             HAZI_HINAM.code: HaziHinamClient}[chain.code]()
 

@@ -123,7 +123,7 @@ def build(targets, output, refresh=False, offline=False):
         key, store_id = target.split(':', 1)
         chain = CHAINS_BY_KEY[key]
         try:
-            client = client_for_chain(chain)
+            client = client_for_chain(chain, store_id)
             stores_cache = ROOT / ('tmp/catalog-' + key + '-stores.json')
             if offline:
                 files = [RemoteFile(p.name[len(key)+1:]) for p in cache.glob(key + '-*.gz')]

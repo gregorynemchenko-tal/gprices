@@ -13,10 +13,11 @@ import os
 from pathlib import Path
 import sys
 import time
+import concurrent.futures
 import urllib.parse
 import urllib.request
 
-from importer import CHAINS as FTPS_CHAINS, SupabaseRest
+from importer import CHAINS as FTPS_CHAINS, SupabaseRest, ImportFailure
 from http_importer import CHAINS, CHAINS_BY_KEY, client_for_chain
 from build_catalog import ROOT, build as build_catalog
 from build_promotions import build as build_promotions
@@ -66,9 +67,19 @@ def publish(db, branch, kind, filename, published_at, fetched_at, rows):
         raw_path = f"{branch['id']}/{int(branch['storeId'])}/{digest}.gz"
         upload(db, 'catalog-raw', raw_path, cache.read_bytes(), 'application/gzip')
         db.request('PATCH', 'source_files', {'id': 'eq.' + get_snapshot_file(db, snapshot)}, {'raw_path': raw_path})
-    for offset in range(0, len(rows), 250):
-        rpc(db, 'stage_catalog_rows', p_snapshot_id=snapshot, p_rows=rows[offset:offset+250])
-    result = rpc(db, 'publish_catalog_snapshot', p_snapshot_id=snapshot, p_expected_count=len(rows))
+    # Publication runs only after every disjoint, idempotent staging batch succeeds.
+    batches = [rows[offset:offset+500] for offset in range(0, len(rows), 500)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        list(pool.map(lambda batch: rpc(db, 'stage_catalog_rows', p_snapshot_id=snapshot, p_rows=batch), batches))
+    for attempt in range(4):
+        try:
+            result = rpc(db, 'publish_catalog_snapshot', p_snapshot_id=snapshot, p_expected_count=len(rows))
+            break
+        except ImportFailure as error:
+            # Concurrent networks may touch the same canonical products. Retry
+            # only transactions the database explicitly rolled back.
+            if attempt == 3 or not any(code in str(error) for code in ('40P01', '40001', '55P03')): raise
+            time.sleep(2 ** attempt)
     print(json.dumps({'store': store_key(branch), 'kind': kind, **result}), flush=True)
     return result
 
@@ -123,12 +134,17 @@ def publish_releases(db):
         result = []
         offset = 0
         while True:
-            page = db.request('GET', table, {'select': select, 'order': order, 'offset': str(offset), 'limit': '1000',**(filters or {})})
-            result.extend(page)
-            if len(page) < 1000: return result
-            offset += len(page)
+            offsets = [offset] if not offset else [offset + 1000 * i for i in range(4)]
+            def read_page(start):
+                return db.request('GET', table, {'select': select, 'order': order, 'offset': str(start), 'limit': '1000',**(filters or {})})
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                pages = list(pool.map(read_page, offsets))
+            for page in pages:
+                result.extend(page)
+                if len(page) < 1000: return result
+            offset += 1000 * len(offsets)
     products = [p['payload'] for p in all_rows('catalog_products')]
-    snapshots = all_rows('store_snapshots')
+    snapshots = all_rows('store_snapshots', filters={'state':'eq.published'})
     files = {f['id']: f for f in all_rows('source_files')}
     stores = {s['id']: s for s in all_rows('retail_stores')}
     chains = {c['id']: c for c in all_rows('retail_chains')}
@@ -147,26 +163,15 @@ def publish_releases(db):
         st, f = stores[s['store_id']], files[s['source_file_id']]
         chain = chains[st['chain_id']]
         if s['kind'] == 'prices':
-            prices, offset = {}, 0
-            while True:
-                page = db.request('GET', 'retail_prices_current', {'store_id': 'eq.'+st['id'], 'available': 'eq.true',
-                    'select': 'product_id,price_minor', 'order': 'product_id', 'offset': str(offset), 'limit': '1000'})
-                prices.update({p['product_id']: p['price_minor'] for p in page})
-                if len(page) < 1000: break
-                offset += len(page)
+            prices = {p['product_id']:p['price_minor'] for p in all_rows('retail_prices_current',
+                select='product_id,price_minor',order='product_id',filters={'store_id':'eq.'+st['id'],'available':'eq.true'})}
             branches.append({'id': chain['id'], 'name': chain['name'], 'branch': st['name'], 'address': st['address'],
                 'storeId': st['external_id'], 'cityCode': st['city_code'], 'distance': 'Расстояние не рассчитано',
                 'color': '#326CAC', 'prices': prices, 'sourceUrl': chain['source_url'], 'sourceFile': f['filename'],
                 'publishedAt': f['published_at'], 'fetchedAt': f['fetched_at'], 'productCount': len(prices)})
         else:
             sources.append({'chainId': chain['id'], 'sourceFile': f['filename'], 'publishedAt': f['published_at'], 'count': s['row_count']})
-            offset = 0
-            while True:
-                page = db.request('GET', 'retail_promotions', {'store_id': 'eq.'+st['id'], 'select': 'payload',
-                    'order': 'id', 'offset': str(offset), 'limit': '1000'})
-                promos.extend(p['payload'] for p in page)
-                if len(page) < 1000: break
-                offset += len(page)
+            promos.extend(p['payload'] for p in all_rows('retail_promotions',select='payload',filters={'store_id':'eq.'+st['id']}))
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     products.sort(key=lambda p:(p.get('image_status')!='ready',p.get('category')=='Другое',not p['id'].startswith('gtin:'),p.get('original','')))
     catalog = {'generatedAt': now, 'city': 'Ришон-ле-Цион', 'products': products, 'chains': branches, 'failures': []}
@@ -181,7 +186,7 @@ def publish_releases(db):
     print(json.dumps({'release': version, 'products': len(products), 'branches': len(branches), 'promotions': len(promos)}), flush=True)
 
 
-def consume(db, max_jobs, chain=None):
+def consume(db, max_jobs, chain=None, publish_release=True):
     failed = 0
     if chain: rpc(db,'plan_catalog_jobs')
     for _ in range(max_jobs):
@@ -201,7 +206,7 @@ def consume(db, max_jobs, chain=None):
             failed += 1
             rpc(db, 'finish_catalog_job', p_id=claimed['id'], p_success=False, p_error=str(error)[:500])
             print(json.dumps({'store': target, 'error': str(error)[:200]}), flush=True)
-    publish_releases(db)
+    if publish_release: publish_releases(db)
     if failed: raise RuntimeError(f'{failed} catalog job(s) failed; previous published versions preserved')
 
 
@@ -210,6 +215,7 @@ def main():
     parser.add_argument('--seed', action='store_true')
     parser.add_argument('--max-jobs', type=int, default=3)
     parser.add_argument('--release-only', action='store_true')
+    parser.add_argument('--no-release', action='store_true', help='Publish branches; a final coordinator assembles the release')
     parser.add_argument('--images', type=int, default=0)
     parser.add_argument('--retailer-images', type=int, default=0)
     parser.add_argument('--chain', choices=list(CHAINS_BY_KEY))
@@ -229,7 +235,7 @@ def main():
         publish_releases(db)
         print(json.dumps({'planned_jobs': rpc(db, 'plan_catalog_jobs')}), flush=True)
     elif args.release_only: publish_releases(db)
-    else: consume(db, max(1, min(args.max_jobs, 12)),args.chain)
+    else: consume(db, max(1, min(args.max_jobs, 12)),args.chain,not args.no_release)
 
 
 if __name__ == '__main__':

@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       import_prices:
-        description: 'Attempt official price imports (requires network access to chain hosts)'
+        description: 'Also attempt the three legacy sources with restricted cloud connectivity'
         type: boolean
         default: false
       photo_batch:
@@ -18,24 +18,46 @@ permissions:
 concurrency:
   group: catalog-import
   cancel-in-progress: false
+env:
+  SUPABASE_URL: https://simjxoshjprrexdixbso.supabase.co
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SERVICE_ROLE_KEY }}
+  PYTHONUNBUFFERED: '1'
 jobs:
-  import:
+  prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        chain: [keshet_teamim, rami_levy, osher_ad, yohananof, tiv_taam, freshmarket, shufersal, mahsanei_hashuk, super_bareket]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Refresh official branch prices and promotions
+        run: python catalog_worker.py --chain "${{ matrix.chain }}" --max-jobs 1 --no-release
+  publish:
+    needs: prices
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      SUPABASE_URL: https://simjxoshjprrexdixbso.supabase.co
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SERVICE_ROLE_KEY }}
-      PYTHONUNBUFFERED: '1'
       PHOTO_BATCH: ${{ github.event_name == 'workflow_dispatch' && inputs.photo_batch || '2500' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Refresh Keshet Teamim
-        run: python catalog_worker.py --chain keshet_teamim --max-jobs 2
-      - name: Prepare product photos and publish catalog release
+      - name: Publish completed branches, preserving unavailable sources
+        run: python catalog_worker.py --release-only
+      - name: Prepare product photos
+        if: env.PHOTO_BATCH != '0'
         run: python catalog_worker.py --retailer-images "$PHOTO_BATCH" --images 5 --release-only
-      - name: Attempt official price imports
+      - name: Attempt legacy price sources
         if: github.event_name == 'workflow_dispatch' && inputs.import_prices
-        run: python catalog_worker.py --max-jobs 6
+        run: |
+          python catalog_worker.py --chain carrefour --max-jobs 1 --no-release
+          python catalog_worker.py --chain victory --max-jobs 1 --no-release
+          python catalog_worker.py --chain hazi_hinam --max-jobs 1

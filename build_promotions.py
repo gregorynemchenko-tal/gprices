@@ -131,7 +131,7 @@ def build(offline=False, targets=None, output=None, catalog=None):
             if offline:
                 files = [RemoteFile(p.name[len(key)+1:]) for p in cache.glob(key + '-PromoFull*.gz')]
             else:
-                client = client_for_chain(chain)
+                client = client_for_chain(chain, store)
                 files = client.list()
             remote = latest_store_snapshot(files, chain, 'PromoFull', store)
             if not remote: raise ValueError('No full promotion snapshot')
