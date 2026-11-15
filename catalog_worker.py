@@ -16,6 +16,7 @@ import time
 import concurrent.futures
 import urllib.parse
 import urllib.request
+import urllib.error
 
 from importer import CHAINS as FTPS_CHAINS, SupabaseRest, ImportFailure
 from http_importer import CHAINS, CHAINS_BY_KEY, client_for_chain
@@ -93,8 +94,11 @@ def upload(db, bucket, path, payload, mime):
     req = urllib.request.Request(url, data=payload, method='POST', headers={
         'apikey': db.service_role_key, 'Authorization': 'Bearer ' + db.service_role_key,
         'Content-Type': mime, 'x-upsert': 'true', 'cache-control': '31536000' if bucket == 'product-images' else '60'})
-    with urllib.request.urlopen(req, timeout=90) as response:
-        response.read()
+    try:
+        with urllib.request.urlopen(req, timeout=90) as response:
+            response.read()
+    except urllib.error.HTTPError as error:
+        raise ImportFailure(f'Storage upload {bucket}: {error.code}: {error.read(300).decode(errors="replace")}') from error
 
 
 def register(db, catalog):
@@ -187,9 +191,29 @@ def publish_releases(db):
     catalog_bytes = json.dumps(catalog, ensure_ascii=False, separators=(',', ':')).encode()
     promo_bytes = json.dumps(promotion_data, ensure_ascii=False, separators=(',', ':')).encode()
     version = hashlib.sha256(catalog_bytes + promo_bytes).hexdigest()[:20]
-    for kind, payload in [('catalog', catalog_bytes), ('promotions', promo_bytes)]:
-        upload(db, 'catalog-releases', f'{version}/{kind}.json', payload, 'application/json')
-    manifest = {'version': version, 'generatedAt': now, 'catalog': f'{version}/catalog.json', 'promotions': f'{version}/promotions.json'}
+    def upload_parts(kind, rows):
+        parts, batch, size = [], [], 2
+        def flush():
+            name = f'{version}/{kind}-{len(parts):04d}.json'
+            upload(db, 'catalog-releases', name, b'['+b','.join(batch)+b']', 'application/json')
+            parts.append(name)
+        for row in rows:
+            encoded = json.dumps(row, ensure_ascii=False, separators=(',', ':')).encode()
+            if len(encoded) > 4*1024*1024: raise ValueError('Single catalog row exceeds part limit')
+            if batch and size+len(encoded)+1 > 4*1024*1024:
+                flush();batch=[];size=2
+            batch.append(encoded);size+=len(encoded)+1
+        if batch: flush()
+        return parts
+    # Small immutable parts fit the free Storage object limit. The manifest is
+    # committed last; a failed upload cannot expose an incomplete release.
+    catalog_index = {k:v for k,v in catalog.items() if k != 'products'}
+    catalog_index['productParts'] = upload_parts('products', catalog['products'])
+    promotion_index = {k:v for k,v in promotion_data.items() if k != 'promotions'}
+    promotion_index['promotionParts'] = upload_parts('offers', promotion_data['promotions'])
+    for kind, index in [('catalog',catalog_index),('promotions',promotion_index)]:
+        upload(db, 'catalog-releases', f'{version}/{kind}.json', json.dumps(index,ensure_ascii=False,separators=(',',':')).encode(), 'application/json')
+    manifest = {'format':2,'version': version, 'generatedAt': now, 'catalog': f'{version}/catalog.json', 'promotions': f'{version}/promotions.json'}
     upload(db, 'catalog-releases', 'manifest.json', json.dumps(manifest).encode(), 'application/json')
     print(json.dumps({'release': version, 'products': len(products), 'branches': len(branches), 'promotions': len(promos)}), flush=True)
 

@@ -1,0 +1,19 @@
+name: Check alternate source connectivity
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Read public Mahsanei HaShuk directory
+        run: python -c "import urllib.request,json; u='https://laibcatalog.co.il/webapi/api/getfiles?edi=7290661400001'; r=urllib.request.urlopen(urllib.request.Request(u,headers={'User-Agent':'Mozilla/5.0'}),timeout=25); data=json.load(r); print('Public files:',len(data)); assert len(data)>0"

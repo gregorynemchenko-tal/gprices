@@ -31,9 +31,11 @@ class CatalogWorkerTests(unittest.TestCase):
         with patch('catalog_worker.upload',side_effect=lambda _db,bucket,path,data,mime:uploads.update({path:json.loads(data)})):
             publish_releases(db)
         manifest=uploads['manifest.json'];release=uploads[manifest['catalog']]
-        self.assertEqual(len(release['products']),5501)
+        rows=[p for name in release['productParts'] for p in uploads[name]]
+        self.assertEqual(manifest['format'],2)
+        self.assertEqual(len(rows),5501)
         self.assertEqual(len(release['chains'][0]['prices']),5501)
-        self.assertEqual(sum(p['image_status']=='ready' for p in release['products']),1201)
+        self.assertEqual(sum(p['image_status']=='ready' for p in rows),1201)
 
     def test_publication_waits_for_all_bounded_staging_batches(self):
         db=Mock()
