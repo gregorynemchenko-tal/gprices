@@ -180,7 +180,11 @@ def publish_releases(db):
         print(json.dumps({'export_store':st['id'],'kind':s['kind']}),flush=True)
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     products.sort(key=lambda p:(p.get('image_status')!='ready',p.get('category')=='Другое',not p['id'].startswith('gtin:'),p.get('original','')))
-    catalog = {'generatedAt': now, 'city': 'Ришон-ле-Цион', 'products': products, 'chains': branches, 'failures': []}
+    from product_groups import build_groups, RULE_VERSION
+    group_rows, members = build_groups(products)
+    rpc(db,'sync_product_groups',p_groups=group_rows,p_members=members,p_rule_version=RULE_VERSION)
+    product_groups = rpc(db,'get_product_groups')
+    catalog = {'generatedAt': now, 'city': 'Ришон-ле-Цион', 'products': products, 'chains': branches, 'failures': [],'productGroups':product_groups}
     promotion_data = {'generatedAt': now, 'sources': sources, 'promotions': promos, 'failures': []}
     catalog_bytes = json.dumps(catalog, ensure_ascii=False, separators=(',', ':')).encode()
     promo_bytes = json.dumps(promotion_data, ensure_ascii=False, separators=(',', ':')).encode()

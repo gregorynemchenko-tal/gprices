@@ -29,11 +29,13 @@ class CatalogWorkerTests(unittest.TestCase):
             return [p for p in tables[table] if p[key]>params.get(key,'gt.')[3:]][:int(params['limit'])]
         db.request.side_effect=read
         uploads={}
-        with patch('catalog_worker.upload',side_effect=lambda _db,bucket,path,data,mime:uploads.update({path:json.loads(data)})):
+        with patch('catalog_worker.rpc',side_effect=lambda _db,name,**body: [] if name=='get_product_groups' else {'groups':0,'members':0}) as group_rpc, patch('catalog_worker.upload',side_effect=lambda _db,bucket,path,data,mime:uploads.update({path:json.loads(data)})):
             publish_releases(db)
+        self.assertEqual([c.args[1] for c in group_rpc.call_args_list],['sync_product_groups','get_product_groups'])
         manifest=uploads['manifest.json'];release=uploads[manifest['catalog']]
         rows=[p for name in release['productParts'] for p in uploads[name]]
         self.assertEqual(manifest['format'],2)
+        self.assertEqual(release['productGroups'],[])
         self.assertGreaterEqual(len(release['productParts']),2)
         self.assertTrue(all(len(json.dumps(uploads[name],ensure_ascii=False,separators=(',',':')).encode())<=4*1024*1024 for name in release['productParts']))
         self.assertEqual(len(rows),5501)
