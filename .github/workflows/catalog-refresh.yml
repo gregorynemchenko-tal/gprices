@@ -2,6 +2,10 @@ name: Refresh official catalog
 on:
   workflow_dispatch:
     inputs:
+      release_only:
+        description: 'Only republish already completed database snapshots'
+        type: boolean
+        default: false
       import_prices:
         description: 'Also attempt the three legacy sources with restricted cloud connectivity'
         type: boolean
@@ -24,6 +28,7 @@ env:
   PYTHONUNBUFFERED: '1'
 jobs:
   prices:
+    if: inputs.release_only != true
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:

@@ -143,7 +143,15 @@ def publish_releases(db):
                 result.extend(page)
                 if len(page) < 1000: return result
             offset += 1000 * len(offsets)
-    products = [p['payload'] for p in all_rows('catalog_products')]
+    # Keyset traversal avoids increasingly expensive OFFSET scans through large
+    # product payloads on the small hosted database. Fetch only required columns.
+    products, cursor = [], ''
+    while True:
+        page = db.request('GET', 'catalog_products', {'select':'id,payload', 'order':'id',
+            'id':'gt.'+cursor, 'limit':'500'})
+        products.extend(p['payload'] for p in page)
+        if len(page) < 500: break
+        cursor = page[-1]['id']
     snapshots = all_rows('store_snapshots', filters={'state':'eq.published'})
     files = {f['id']: f for f in all_rows('source_files')}
     stores = {s['id']: s for s in all_rows('retail_stores')}

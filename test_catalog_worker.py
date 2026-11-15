@@ -23,7 +23,10 @@ class CatalogWorkerTests(unittest.TestCase):
             'retail_prices_current':[{'product_id':p['id'],'price_minor':700} for p in products],
             'product_images':[{'product_id':p['id'],'storage_path':None,'external_url':'https://img.rami-levy.co.il/product/7290004131074/small.jpg','source_url':None,'license':None,'version':'1'} for p in products[:1201]]}
         db=Mock(base_url='https://simjxoshjprrexdixbso.supabase.co')
-        db.request.side_effect=lambda method,table,params:tables[table][int(params['offset']):int(params['offset'])+1000]
+        def read(method,table,params):
+            if table=='catalog_products':return [p for p in products if p['id']>params['id'][3:]][:int(params['limit'])]
+            return tables[table][int(params['offset']):int(params['offset'])+1000]
+        db.request.side_effect=read
         uploads={}
         with patch('catalog_worker.upload',side_effect=lambda _db,bucket,path,data,mime:uploads.update({path:json.loads(data)})):
             publish_releases(db)
