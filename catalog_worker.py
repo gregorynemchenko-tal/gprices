@@ -139,19 +139,15 @@ def publish_releases(db):
         cursor = ''
         if select != '*' and order not in select.split(','): select = order + ',' + select
         while True:
-            page = db.request('GET', table, {'select':select, 'order':order, order:'gt.'+cursor, 'limit':'500', **(filters or {})})
+            params = {'select':select, 'order':order, 'limit':'1000', **(filters or {})}
+            if cursor: params[order] = 'gt.'+cursor
+            page = db.request('GET', table, params)
             result.extend(page)
-            if len(page) < 500: return result
+            if len(page) < 1000: return result
             cursor = page[-1][order]
     # Keyset traversal avoids increasingly expensive OFFSET scans through large
     # product payloads on the small hosted database. Fetch only required columns.
-    products, cursor = [], ''
-    while True:
-        page = db.request('GET', 'catalog_products', {'select':'id,payload', 'order':'id',
-            'id':'gt.'+cursor, 'limit':'500'})
-        products.extend(p['payload'] for p in page)
-        if len(page) < 500: break
-        cursor = page[-1]['id']
+    products = [row['payload'] for row in all_rows('catalog_products', select='id,payload')]
     print(json.dumps({'export_products':len(products)}),flush=True)
     snapshots = all_rows('store_snapshots', filters={'state':'eq.published'})
     files = {f['id']: f for f in all_rows('source_files')}

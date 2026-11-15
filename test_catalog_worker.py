@@ -25,7 +25,8 @@ class CatalogWorkerTests(unittest.TestCase):
         db=Mock(base_url='https://simjxoshjprrexdixbso.supabase.co')
         def read(method,table,params):
             key=params['order']
-            return [p for p in tables[table] if p[key]>params[key][3:]][:int(params['limit'])]
+            self.assertNotEqual(params.get(key),'gt.','Empty cursors must not be sent to UUID columns')
+            return [p for p in tables[table] if p[key]>params.get(key,'gt.')[3:]][:int(params['limit'])]
         db.request.side_effect=read
         uploads={}
         with patch('catalog_worker.upload',side_effect=lambda _db,bucket,path,data,mime:uploads.update({path:json.loads(data)})):
