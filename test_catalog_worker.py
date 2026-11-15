@@ -14,7 +14,7 @@ from catalog_worker import publish_releases
 
 class CatalogWorkerTests(unittest.TestCase):
     def test_release_keeps_every_page_of_products_prices_and_ready_photos(self):
-        products=[{'id':f'gtin:{i:014d}','payload':{'id':f'gtin:{i:014d}','original':str(i),'category':'Молочное'}} for i in range(5501)]
+        products=[{'id':f'gtin:{i:014d}','payload':{'id':f'gtin:{i:014d}','original':str(i)+'x'*800,'category':'Молочное'}} for i in range(5501)]
         tables={'catalog_products':products,
             'store_snapshots':[{'id':'snapshot','state':'published','store_id':'test:1','source_file_id':'file','kind':'prices'}],
             'source_files':[{'id':'file','filename':'PriceFull.gz','published_at':'2026-11-15T00:00:00Z','fetched_at':'2026-11-15T01:00:00Z'}],
@@ -24,8 +24,8 @@ class CatalogWorkerTests(unittest.TestCase):
             'product_images':[{'product_id':p['id'],'storage_path':None,'external_url':'https://img.rami-levy.co.il/product/7290004131074/small.jpg','source_url':None,'license':None,'version':'1'} for p in products[:1201]]}
         db=Mock(base_url='https://simjxoshjprrexdixbso.supabase.co')
         def read(method,table,params):
-            if table=='catalog_products':return [p for p in products if p['id']>params['id'][3:]][:int(params['limit'])]
-            return tables[table][int(params['offset']):int(params['offset'])+1000]
+            key=params['order']
+            return [p for p in tables[table] if p[key]>params[key][3:]][:int(params['limit'])]
         db.request.side_effect=read
         uploads={}
         with patch('catalog_worker.upload',side_effect=lambda _db,bucket,path,data,mime:uploads.update({path:json.loads(data)})):
@@ -33,6 +33,8 @@ class CatalogWorkerTests(unittest.TestCase):
         manifest=uploads['manifest.json'];release=uploads[manifest['catalog']]
         rows=[p for name in release['productParts'] for p in uploads[name]]
         self.assertEqual(manifest['format'],2)
+        self.assertGreaterEqual(len(release['productParts']),2)
+        self.assertTrue(all(len(json.dumps(uploads[name],ensure_ascii=False,separators=(',',':')).encode())<=4*1024*1024 for name in release['productParts']))
         self.assertEqual(len(rows),5501)
         self.assertEqual(len(release['chains'][0]['prices']),5501)
         self.assertEqual(sum(p['image_status']=='ready' for p in rows),1201)

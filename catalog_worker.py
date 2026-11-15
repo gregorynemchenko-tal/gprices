@@ -136,17 +136,13 @@ def publish_releases(db):
     """
     def all_rows(table, select='*', order='id', filters=None):
         result = []
-        offset = 0
+        cursor = ''
+        if select != '*' and order not in select.split(','): select = order + ',' + select
         while True:
-            offsets = [offset] if not offset else [offset + 1000 * i for i in range(4)]
-            def read_page(start):
-                return db.request('GET', table, {'select': select, 'order': order, 'offset': str(start), 'limit': '1000',**(filters or {})})
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-                pages = list(pool.map(read_page, offsets))
-            for page in pages:
-                result.extend(page)
-                if len(page) < 1000: return result
-            offset += 1000 * len(offsets)
+            page = db.request('GET', table, {'select':select, 'order':order, order:'gt.'+cursor, 'limit':'500', **(filters or {})})
+            result.extend(page)
+            if len(page) < 500: return result
+            cursor = page[-1][order]
     # Keyset traversal avoids increasingly expensive OFFSET scans through large
     # product payloads on the small hosted database. Fetch only required columns.
     products, cursor = [], ''
@@ -156,6 +152,7 @@ def publish_releases(db):
         products.extend(p['payload'] for p in page)
         if len(page) < 500: break
         cursor = page[-1]['id']
+    print(json.dumps({'export_products':len(products)}),flush=True)
     snapshots = all_rows('store_snapshots', filters={'state':'eq.published'})
     files = {f['id']: f for f in all_rows('source_files')}
     stores = {s['id']: s for s in all_rows('retail_stores')}
@@ -184,6 +181,7 @@ def publish_releases(db):
         else:
             sources.append({'chainId': chain['id'], 'sourceFile': f['filename'], 'publishedAt': f['published_at'], 'count': s['row_count']})
             promos.extend(p['payload'] for p in all_rows('retail_promotions',select='payload',filters={'store_id':'eq.'+st['id']}))
+        print(json.dumps({'export_store':st['id'],'kind':s['kind']}),flush=True)
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     products.sort(key=lambda p:(p.get('image_status')!='ready',p.get('category')=='Другое',not p['id'].startswith('gtin:'),p.get('original','')))
     catalog = {'generatedAt': now, 'city': 'Ришон-ле-Цион', 'products': products, 'chains': branches, 'failures': []}
